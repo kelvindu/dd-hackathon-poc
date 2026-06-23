@@ -1,0 +1,200 @@
+POC requirements spec
+Goal
+
+Build a POC Kubernetes pod workload on EC2 that emits intermittent errors and warnings, sends structured logs/metrics/traces to CloudWatch, and uses a Bedrock-powered analyzer to generate a root-cause summary from the CloudWatch evidence.
+Scope
+
+    One EC2-hosted Kubernetes node group or a very small cluster.
+
+    One analyzer service plus one “faulty workload” service.
+
+    CloudWatch Logs for app logs, CloudWatch metrics for health signals, and trace data for request flow.
+
+    A Bedrock analysis step that reads the CloudWatch-observed incident data and returns a concise RCA summary.
+
+Functional requirements
+
+    Pods must randomly emit warnings, transient errors, timeouts, and dependency failures.
+
+    Each request must carry a trace id and request id.
+
+    Logs must be structured JSON with severity, service name, error type, and trace id.
+
+    Metrics must include request count, error count, warning count, latency, and restart count.
+
+    The analyzer must retrieve the relevant CloudWatch logs/traces for a time window and ask Bedrock to summarize likely root cause, impact, and recommended fix.
+
+Observability flow
+
+    Pod emits logs, metrics, and traces.
+
+    CloudWatch ingests them.
+
+    Incident detector identifies abnormal behavior.
+
+    RCA worker queries the relevant CloudWatch window.
+
+    Bedrock receives a compact incident bundle and generates a summary.
+
+Bedrock analysis prompt
+
+Use a short, structured prompt with:
+
+    service name.
+
+    time window.
+
+    top logs.
+
+    key traces.
+
+    metrics delta.
+
+    suspected fault injection type.
+
+    requested output format: root cause, supporting evidence, confidence, fix.
+
+Output format for RCA
+
+    Incident summary.
+
+    Primary root cause.
+
+    Evidence from logs, metrics, and traces.
+
+    User impact.
+
+    Suggested remediation.
+
+    Confidence level.
+
+POC architecture
+Components
+
+    faulty-pod: emits controlled warnings/errors.
+
+    analyzer-pod: collects incident context and calls Bedrock.
+
+    otel-collector or lightweight logging agent: forwards traces/logs to CloudWatch.
+
+    CloudWatch Logs/Metrics/Traces: source of truth for observability.
+
+    Bedrock summarizer: generates the RCA narrative.
+
+Fault injection examples
+
+    5 percent random 500 errors.
+
+    Occasional 2–5 second latency spikes.
+
+    Dependency timeout every N requests.
+
+    Memory pressure warning when a threshold is crossed.
+
+    Bad payload warning for malformed requests.
+
+Bedrock RCA interface spec
+Interface shape
+
+Use a single REST endpoint on the analyzer pod, for example POST /rca/analyze. The payload should include:
+
+    incident id.
+
+    service name.
+
+    time window.
+
+    top errors and warnings.
+
+    metric deltas.
+
+    trace summaries.
+
+    suspected fault type if known.
+
+The analyzer then:
+
+    queries CloudWatch Logs Insights and traces for that time window.
+
+    compresses the findings into a short incident bundle.
+
+    sends that bundle to Bedrock.
+
+    returns Bedrock’s RCA plus confidence and evidence.
+
+Suggested request payload
+
+json
+{
+  "incident_id": "inc-2026-06-23-001",
+  "service": "pods-analyzer",
+  "window_start": "2026-06-23T10:20:00Z",
+  "window_end": "2026-06-23T10:30:00Z",
+  "filters": {
+    "namespace": "poc",
+    "pod_name": "faulty-pod"
+  }
+}
+
+Suggested Bedrock prompt
+
+The analyzer should send Bedrock a compact prompt like this:
+
+text
+You are an incident RCA assistant.
+
+Analyze the following CloudWatch incident bundle and produce:
+1. primary root cause
+2. supporting evidence
+3. impact
+4. likely fix
+5. confidence score
+
+Incident bundle:
+- service: faulty-pod
+- time window: ...
+- errors: ...
+- warnings: ...
+- latency spikes: ...
+- trace anomalies: ...
+- metric changes: ...
+
+Return JSON only.
+
+Response format
+
+Have Bedrock return structured JSON so the UI and logs can use it directly:
+
+json
+{
+  "root_cause": "dependency timeout caused retries and latency spikes",
+  "evidence": [
+    "error rate increased 5x",
+    "trace shows downstream timeout",
+    "logs contain repeated timeout warnings"
+  ],
+  "impact": "requests delayed and some failed",
+  "recommended_fix": [
+    "increase timeout budget",
+    "add retry backoff",
+    "inspect downstream service"
+  ],
+  "confidence": 0.84
+}
+
+
+For Kiro, I would expose the analyzer in three panels:
+
+    incident selector.
+
+    evidence timeline from CloudWatch.
+
+    Bedrock RCA output card.
+
+
+
+Add a Bedrock RCA interface section to the Kiro spec with a POST /rca/analyze workflow, a compact CloudWatch incident bundle, and structured JSON output for the summary.
+
+Recommended simplifications
+
+For a POC, keep tracing lightweight and avoid full distributed tracing everywhere. Use one service, one analyzer, and one failure mode at a time so the RCA quality is easy to validate. If cost starts to rise, reduce log retention and sample only the incidents that matter most.

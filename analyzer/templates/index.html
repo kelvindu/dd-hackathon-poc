@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RCA Analyzer</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f1117;
+      color: #e0e0e0;
+      min-height: 100vh;
+      padding: 24px;
+    }
+
+    h1 {
+      font-size: 1.4rem;
+      font-weight: 600;
+      color: #fff;
+      margin-bottom: 24px;
+      letter-spacing: 0.02em;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 340px 1fr;
+      grid-template-rows: auto auto;
+      gap: 20px;
+      max-width: 1200px;
+    }
+
+    .panel {
+      background: #1a1d27;
+      border: 1px solid #2a2d3a;
+      border-radius: 10px;
+      padding: 20px;
+    }
+
+    .panel h2 {
+      font-size: 0.85rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #888;
+      margin-bottom: 16px;
+    }
+
+    /* ---- Panel 1: Form ---- */
+    #panel-form {
+      grid-column: 1;
+      grid-row: 1 / 3;
+    }
+
+    .field { margin-bottom: 14px; }
+
+    .field label {
+      display: block;
+      font-size: 0.78rem;
+      color: #aaa;
+      margin-bottom: 5px;
+    }
+
+    .field input {
+      width: 100%;
+      background: #0f1117;
+      border: 1px solid #2a2d3a;
+      border-radius: 6px;
+      padding: 8px 10px;
+      color: #e0e0e0;
+      font-size: 0.88rem;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    .field input:focus { border-color: #5b8af0; }
+
+    button[type="submit"] {
+      width: 100%;
+      margin-top: 6px;
+      padding: 10px;
+      background: #3b5fc0;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    button[type="submit"]:hover { background: #4d74d8; }
+    button[type="submit"]:disabled { background: #2a3a6a; cursor: not-allowed; }
+
+    #form-error {
+      margin-top: 10px;
+      font-size: 0.82rem;
+      color: #e05c5c;
+      display: none;
+    }
+
+    /* ---- Panel 2: Evidence Timeline ---- */
+    #panel-evidence {
+      grid-column: 2;
+      grid-row: 1;
+    }
+
+    #evidence-list {
+      max-height: 280px;
+      overflow-y: auto;
+      padding-right: 4px;
+    }
+
+    #evidence-list::-webkit-scrollbar { width: 6px; }
+    #evidence-list::-webkit-scrollbar-track { background: transparent; }
+    #evidence-list::-webkit-scrollbar-thumb { background: #2a2d3a; border-radius: 3px; }
+
+    .evidence-item {
+      padding: 10px 12px;
+      border-left: 3px solid #3b5fc0;
+      background: #0f1117;
+      border-radius: 0 6px 6px 0;
+      margin-bottom: 8px;
+      font-size: 0.82rem;
+      line-height: 1.5;
+      word-break: break-word;
+    }
+
+    .evidence-item.warn { border-left-color: #d4a017; }
+    .evidence-item.error { border-left-color: #e05c5c; }
+
+    .evidence-item .ev-meta {
+      font-size: 0.74rem;
+      color: #666;
+      margin-bottom: 3px;
+    }
+
+    .placeholder {
+      color: #444;
+      font-size: 0.85rem;
+      font-style: italic;
+      text-align: center;
+      padding: 30px 0;
+    }
+
+    /* ---- Panel 3: RCA Card ---- */
+    #panel-rca {
+      grid-column: 2;
+      grid-row: 2;
+    }
+
+    .rca-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+
+    .rca-field {
+      background: #0f1117;
+      border: 1px solid #2a2d3a;
+      border-radius: 8px;
+      padding: 12px 14px;
+    }
+
+    .rca-field.full-width { grid-column: 1 / 3; }
+
+    .rca-field .label {
+      font-size: 0.72rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: #5b8af0;
+      margin-bottom: 6px;
+    }
+
+    .rca-field .value {
+      font-size: 0.85rem;
+      color: #d0d0d0;
+      line-height: 1.55;
+      word-break: break-word;
+    }
+
+    .confidence-bar {
+      margin-top: 8px;
+      height: 6px;
+      background: #2a2d3a;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .confidence-fill {
+      height: 100%;
+      background: #3b5fc0;
+      border-radius: 3px;
+      transition: width 0.4s ease;
+    }
+
+    /* Loading spinner */
+    .spinner {
+      display: none;
+      width: 18px;
+      height: 18px;
+      border: 2px solid #2a2d3a;
+      border-top-color: #5b8af0;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      margin: 0 auto 10px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <h1>☁ RCA Analyzer</h1>
+
+  <div class="grid">
+
+    <!-- Panel 1: Incident Selector Form -->
+    <div class="panel" id="panel-form">
+      <h2>Incident</h2>
+      <form id="rca-form">
+        <div class="field">
+          <label for="incident_id">Incident ID</label>
+          <input type="text" id="incident_id" name="incident_id" placeholder="INC-001" required />
+        </div>
+        <div class="field">
+          <label for="service">Service</label>
+          <input type="text" id="service" name="service" placeholder="faulty-workload" required />
+        </div>
+        <div class="field">
+          <label for="window_start">Window Start</label>
+          <input type="datetime-local" id="window_start" name="window_start" required />
+        </div>
+        <div class="field">
+          <label for="window_end">Window End</label>
+          <input type="datetime-local" id="window_end" name="window_end" required />
+        </div>
+        <div class="field">
+          <label for="namespace">Namespace <span style="color:#555">(optional)</span></label>
+          <input type="text" id="namespace" name="namespace" placeholder="default" />
+        </div>
+        <div class="field">
+          <label for="pod_name">Pod Name <span style="color:#555">(optional)</span></label>
+          <input type="text" id="pod_name" name="pod_name" placeholder="faulty-workload-abc123" />
+        </div>
+        <div class="spinner" id="spinner"></div>
+        <button type="submit" id="submit-btn">Analyze Incident</button>
+        <div id="form-error"></div>
+      </form>
+    </div>
+
+    <!-- Panel 2: Evidence Timeline -->
+    <div class="panel" id="panel-evidence">
+      <h2>Evidence Timeline</h2>
+      <div id="evidence-list">
+        <div class="placeholder" id="evidence-placeholder">Submit an incident to see evidence.</div>
+      </div>
+    </div>
+
+    <!-- Panel 3: RCA Output Card -->
+    <div class="panel" id="panel-rca">
+      <h2>Root Cause Analysis</h2>
+      <div id="rca-content">
+        <div class="placeholder" id="rca-placeholder">RCA results will appear here.</div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    // Pre-fill window to last 30 minutes as a convenience default
+    (function () {
+      const pad = (n) => String(n).padStart(2, '0');
+      const toLocal = (d) => {
+        const Y = d.getFullYear(), M = pad(d.getMonth() + 1), D = pad(d.getDate());
+        const h = pad(d.getHours()), m = pad(d.getMinutes());
+        return `${Y}-${M}-${D}T${h}:${m}`;
+      };
+      const now = new Date();
+      const start = new Date(now.getTime() - 30 * 60 * 1000);
+      document.getElementById('window_end').value = toLocal(now);
+      document.getElementById('window_start').value = toLocal(start);
+    })();
+
+    function showError(msg) {
+      const el = document.getElementById('form-error');
+      el.textContent = msg;
+      el.style.display = 'block';
+    }
+
+    function clearError() {
+      const el = document.getElementById('form-error');
+      el.textContent = '';
+      el.style.display = 'none';
+    }
+
+    function setLoading(loading) {
+      document.getElementById('submit-btn').disabled = loading;
+      document.getElementById('spinner').style.display = loading ? 'block' : 'none';
+    }
+
+    function renderEvidence(data) {
+      const list = document.getElementById('evidence-list');
+      list.innerHTML = '';
+
+      // evidence field (string summary from Bedrock)
+      const evidenceText = data.evidence || '';
+
+      // If the response included raw log_events array (future task 14 extension), render them
+      const logs = Array.isArray(data.log_events) ? data.log_events : [];
+      const metrics = data.metric_deltas || null;
+
+      if (!evidenceText && logs.length === 0 && !metrics) {
+        list.innerHTML = '<div class="placeholder">No evidence returned.</div>';
+        return;
+      }
+
+      // Render evidence summary text as the first item
+      if (evidenceText) {
+        const item = document.createElement('div');
+        item.className = 'evidence-item';
+        item.innerHTML = `<div class="ev-meta">Evidence Summary</div>${escapeHtml(evidenceText)}`;
+        list.appendChild(item);
+      }
+
+      // Render individual log events if present
+      logs.forEach((log) => {
+        const item = document.createElement('div');
+        const sev = (log.severity || '').toLowerCase();
+        item.className = 'evidence-item' + (sev === 'error' ? ' error' : sev === 'warning' || sev === 'warn' ? ' warn' : '');
+        const ts = log.timestamp ? `<span>${escapeHtml(log.timestamp)}</span> · ` : '';
+        const errorType = log.error_type ? ` [${escapeHtml(log.error_type)}]` : '';
+        item.innerHTML = `<div class="ev-meta">${ts}${escapeHtml(sev.toUpperCase() || 'LOG')}${errorType}</div>${escapeHtml(log.message || JSON.stringify(log))}`;
+        list.appendChild(item);
+      });
+
+      // Render metric deltas if present
+      if (metrics && typeof metrics === 'object') {
+        const item = document.createElement('div');
+        item.className = 'evidence-item';
+        const entries = Object.entries(metrics).map(([k, v]) => `${k}: ${v}`).join(' · ');
+        item.innerHTML = `<div class="ev-meta">Metric Deltas</div>${escapeHtml(entries)}`;
+        list.appendChild(item);
+      }
+    }
+
+    function renderRCA(data) {
+      const container = document.getElementById('rca-content');
+      const confidence = parseFloat(data.confidence) || 0;
+      const pct = Math.min(Math.max(confidence * 100, 0), 100).toFixed(1);
+
+      container.innerHTML = `
+        <div class="rca-grid">
+          <div class="rca-field full-width">
+            <div class="label">Root Cause</div>
+            <div class="value">${escapeHtml(data.root_cause || '—')}</div>
+          </div>
+          <div class="rca-field full-width">
+            <div class="label">Impact</div>
+            <div class="value">${escapeHtml(data.impact || '—')}</div>
+          </div>
+          <div class="rca-field full-width">
+            <div class="label">Recommended Fix</div>
+            <div class="value">${escapeHtml(data.recommended_fix || '—')}</div>
+          </div>
+          <div class="rca-field full-width">
+            <div class="label">Confidence — ${pct}%</div>
+            <div class="confidence-bar">
+              <div class="confidence-fill" style="width: ${pct}%"></div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    document.getElementById('rca-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      clearError();
+      setLoading(true);
+
+      const toISO = (val) => {
+        // datetime-local gives "YYYY-MM-DDTHH:MM"; append :00 for seconds
+        return val.length === 16 ? val + ':00' : val;
+      };
+
+      const body = {
+        incident_id: document.getElementById('incident_id').value.trim(),
+        service: document.getElementById('service').value.trim(),
+        window_start: toISO(document.getElementById('window_start').value),
+        window_end: toISO(document.getElementById('window_end').value),
+      };
+
+      const ns = document.getElementById('namespace').value.trim();
+      const pod = document.getElementById('pod_name').value.trim();
+      if (ns) body.namespace = ns;
+      if (pod) body.pod_name = pod;
+
+      try {
+        const res = await fetch('/rca/analyze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+
+        if (!res.ok) {
+          let msg = `Server returned ${res.status}`;
+          try {
+            const err = await res.json();
+            msg = err.detail || JSON.stringify(err);
+          } catch (_) {}
+          showError(msg);
+          setLoading(false);
+          return;
+        }
+
+        const data = await res.json();
+        renderEvidence(data);
+        renderRCA(data);
+      } catch (err) {
+        showError('Request failed: ' + err.message);
+      } finally {
+        setLoading(false);
+      }
+    });
+  </script>
+</body>
+</html>

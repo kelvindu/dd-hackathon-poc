@@ -1,0 +1,47 @@
+[
+  {
+    "AlarmName": "POC-FaultyWorkload-HighErrorCount",
+    "AlarmDescription": "Fires when error_count_total exceeds 10 in a 5-minute window, indicating a high error rate in the faulty-workload service.",
+    "Namespace": "POC/FaultyWorkload",
+    "MetricName": "error_count_total",
+    "Statistic": "Sum",
+    "Period": 300,
+    "EvaluationPeriods": 1,
+    "DatapointsToAlarm": 1,
+    "Threshold": 10,
+    "ComparisonOperator": "GreaterThanThreshold",
+    "TreatMissingData": "notBreaching",
+    "ActionsEnabled": true,
+    "Dimensions": []
+  },
+  {
+    "AlarmName": "POC-FaultyWorkload-HighLatencyP99",
+    "AlarmDescription": "Fires when the P99 latency of latency_ms exceeds 3000ms over a 5-minute window, indicating severe tail latency in the faulty-workload service.",
+    "Namespace": "POC/FaultyWorkload",
+    "MetricName": "latency_ms",
+    "ExtendedStatistic": "p99",
+    "Period": 300,
+    "EvaluationPeriods": 1,
+    "DatapointsToAlarm": 1,
+    "Threshold": 3000,
+    "ComparisonOperator": "GreaterThanThreshold",
+    "TreatMissingData": "notBreaching",
+    "ActionsEnabled": true,
+    "Dimensions": []
+  },
+  {
+    "AlarmName": "POC-FaultyWorkload-FrequentRestarts",
+    "AlarmDescription": "Fires when restart_count_total exceeds 2 in a 10-minute window, indicating the faulty-workload pod is crash-looping.",
+    "Namespace": "POC/FaultyWorkload",
+    "MetricName": "restart_count_total",
+    "Statistic": "Sum",
+    "Period": 600,
+    "EvaluationPeriods": 1,
+    "DatapointsToAlarm": 1,
+    "Threshold": 2,
+    "ComparisonOperator": "GreaterThanThreshold",
+    "TreatMissingData": "notBreaching",
+    "ActionsEnabled": true,
+    "Dimensions": []
+  }
+]
