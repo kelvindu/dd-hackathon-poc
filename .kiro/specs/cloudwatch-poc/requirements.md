@@ -1,12 +1,12 @@
 # Requirements
 
 ## Goal
-Build a proof-of-concept observability pipeline for Kubernetes pods running on EC2 that intentionally emits intermittent warnings and errors, stores telemetry in CloudWatch, and uses Amazon Bedrock to generate a concise root-cause analysis summary.
+Build a proof-of-concept observability pipeline for Kubernetes pods running on EC2 that intentionally emits intermittent warnings and errors, stores telemetry in CloudWatch, and uses a Bedrock-backed analyzer instrumented with Datadog LLM Observability to generate a concise root-cause analysis summary.
 
 ## User Stories
 - As an operator, I want pods to emit controlled warnings and errors so that I can validate observability and RCA behavior.
 - As an operator, I want pod logs, metrics, and traces to be visible in CloudWatch so that I can inspect incidents.
-- As an operator, I want an analyzer service to summarize the incident using Bedrock so that I can get a root-cause analysis quickly.
+- As an operator, I want the analyzer service to send Bedrock calls into Datadog LLM Observability so that I can trace, monitor, and evaluate the RCA workflow.
 - As an operator, I want the solution to remain low cost so that it fits a small proof of concept budget.
 
 ## Functional Requirements
@@ -19,6 +19,8 @@ Build a proof-of-concept observability pipeline for Kubernetes pods running on E
 - The analyzer service shall accept incident metadata including incident_id, service name, time window, and optional namespace or pod filters.
 - The analyzer service shall query CloudWatch for the relevant incident window.
 - The analyzer service shall compress the observed data into a compact incident bundle before sending it to Bedrock.
+- The Bedrock call path shall be instrumented with Datadog LLM Observability.
+- Datadog shall capture Bedrock prompt, completion, token usage, latency, retry, and error metadata where supported.
 - Bedrock shall return a JSON-only RCA response containing root_cause, evidence, impact, recommended_fix, and confidence.
 
 ## Non-Functional Requirements
@@ -27,10 +29,12 @@ Build a proof-of-concept observability pipeline for Kubernetes pods running on E
 - The solution shall avoid sending raw high-volume logs to Bedrock unless explicitly enabled.
 - The solution shall keep prompts short to reduce cost and latency.
 - The solution shall support a small EC2-hosted Kubernetes environment.
+- The solution shall continue returning an RCA response even if Datadog instrumentation is disabled or unavailable.
 
 ## Acceptance Criteria
 - A pod can emit warnings and errors on demand.
 - CloudWatch shows the generated events and metrics.
 - The analyzer can retrieve the incident evidence from CloudWatch.
 - Bedrock returns a structured RCA summary.
+- The Bedrock call appears in Datadog LLM Observability with useful trace metadata.
 - The solution stays within POC cost limits.

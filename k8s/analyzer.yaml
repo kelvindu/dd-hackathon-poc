@@ -50,6 +50,21 @@ spec:
               value: "anthropic.claude-3-haiku-20240307-v1:0"
             - name: BEDROCK_MAX_TOKENS
               value: "512"
+            # Datadog LLM Observability — set DD_LLMOBS_ENABLED=true to activate
+            - name: DD_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: datadog-secret
+                  key: api-key
+                  optional: true
+            - name: DD_SITE
+              value: "datadoghq.com"
+            - name: DD_LLMOBS_ENABLED
+              value: "false"
+            - name: DD_LLMOBS_ML_APP
+              value: "cloudwatch-rca-poc"
+            - name: DD_LLMOBS_AGENTLESS_ENABLED
+              value: "true"
             # AWS account ID used in IRSA annotations — set via Secret/ConfigMap
             # - name: AWS_ACCOUNT_ID
             #   valueFrom:

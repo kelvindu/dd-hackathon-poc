@@ -1,12 +1,13 @@
 # Design
 
 ## Architecture Overview
-The system consists of four parts: a faulty workload pod, CloudWatch observability, an analyzer service, and Bedrock-based RCA generation. The workload emits controlled failures and telemetry, CloudWatch stores the operational data, the analyzer gathers the relevant incident evidence, and Bedrock produces the summary.
+The system consists of four parts: a faulty workload pod, CloudWatch observability, an analyzer service, and a Datadog-instrumented Bedrock RCA step. The workload emits controlled failures and telemetry, CloudWatch stores the operational data, the analyzer gathers the relevant incident evidence, and Bedrock produces the summary while Datadog records the LLM workflow telemetry.
 
 ## Components
 - Faulty workload pod: generates warnings, errors, latency spikes, and dependency timeouts.
 - Telemetry pipeline: ships logs, metrics, and traces to CloudWatch.
 - Analyzer service: exposes POST /rca/analyze and orchestrates incident retrieval.
+- Datadog LLM Observability SDK: instruments the Bedrock analyzer path.
 - Bedrock RCA step: receives a compact incident bundle and returns the RCA JSON.
 
 ## Data Flow
@@ -16,9 +17,10 @@ The system consists of four parts: a faulty workload pod, CloudWatch observabili
 4. An incident is detected or manually selected.
 5. The analyzer queries the relevant CloudWatch window.
 6. The analyzer summarizes the evidence into a compact bundle.
-7. The analyzer sends the bundle to Bedrock.
-8. Bedrock returns the RCA summary.
-9. The analyzer returns the result to the UI or caller.
+7. The analyzer sends the bundle to Bedrock through Datadog-instrumented code.
+8. Datadog captures prompt, completion, latency, token, and error telemetry for the Bedrock call.
+9. Bedrock returns the RCA summary.
+10. The analyzer returns the result to the UI or caller.
 
 ## Interface Design
 ### POST /rca/analyze
@@ -37,18 +39,19 @@ Response fields:
 - recommended_fix
 - confidence
 
-## Observability Design
-- Use structured JSON logs with trace_id and request_id.
-- Keep metrics limited to the essential pod and incident signals.
-- Use CloudWatch as the primary observability store.
-- Use short time windows for retrieval to reduce query cost.
+## Datadog Observability Design
+- Instrument the analyzer runtime with the Datadog Python SDK.
+- Capture the Bedrock request as a traced LLM span.
+- Preserve trace_id correlation between workload telemetry, CloudWatch evidence, and the analyzer request.
+- Keep prompt and output capture controlled with masking or sampling rules.
 
 ## Cost Controls
 - Log only errors, warnings, and selected sample requests.
 - Keep metric labels low-cardinality.
-- Use a small incident window for RCA.
+- Use a short incident window for RCA.
 - Summarize evidence before calling Bedrock.
 - Avoid sending raw log dumps unless explicitly needed.
+- Disable or reduce Datadog LLM payload capture if cost or privacy pressure increases.
 
 ## RCA Prompt Strategy
 The analyzer should ask Bedrock for:
@@ -66,14 +69,17 @@ The interface can be a simple incident view with:
 - evidence timeline
 - CloudWatch log and trace excerpts
 - Bedrock RCA output card
+- Datadog trace link for the LLM call
 
 ## Risks
 - Excessive logging may increase cost.
 - Too much raw telemetry may produce slow or noisy RCA.
 - Poor trace correlation may reduce summary quality.
+- Datadog prompt capture may expose sensitive data if not masked.
 
 ## Mitigations
 - Enforce log sampling and retention limits.
 - Summarize CloudWatch evidence before Bedrock invocation.
 - Require trace_id on all request paths.
+- Mask or truncate sensitive prompt content.
 - Keep the first version to one service and one failure pattern.

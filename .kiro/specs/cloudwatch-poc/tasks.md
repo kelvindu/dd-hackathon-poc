@@ -136,8 +136,14 @@ This plan implements a Kubernetes observability proof-of-concept in four phases:
   - Pull every constant placeholders in the previous tasks into .env
   - cleanup the rest of app / hardcoded value / constants you see are better to be .env
 
-- [ ] Add Datadog AI Observability into bedrock
-
+- [x] 20. Add Datadog LLM Observability to the Bedrock call path
+  - Add `ddtrace[openai]==2.9.4` to `analyzer/requirements.txt`
+  - Add `DD_API_KEY`, `DD_SITE`, `DD_LLMOBS_ENABLED`, `DD_LLMOBS_ML_APP`, and `DD_LLMOBS_AGENTLESS_ENABLED` to `.env` and `.env.example`
+  - In `analyzer/bedrock.py`, conditionally initialise Datadog LLMObs at import time (no-op when `DD_LLMOBS_ENABLED` is not `"true"`)
+  - Wrap `invoke_rca` with a `LLMObs.llm` span: record model provider (`"bedrock"`), model name (`BEDROCK_MODEL_ID`), input prompt, output text, and approximate token counts
+  - Capture error metadata on the span when `invoke_model` raises or the JSON parse fails; ensure exceptions still propagate so the caller gets a 502
+  - Add `DD_API_KEY` and `DD_LLMOBS_*` env entries to `k8s/analyzer.yaml` (values as comments / placeholders)
+  - _Requirements: Functional Requirements (Bedrock call path instrumented with Datadog LLM Observability); Non-Functional Requirements (graceful degradation when Datadog unavailable)_
 
 ## Notes
 

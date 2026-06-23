@@ -3,6 +3,10 @@ Bedrock RCA integration.
 
 Builds a compact prompt from an incident bundle and invokes the Claude model
 via Amazon Bedrock to produce a JSON-only root-cause analysis.
+
+Datadog LLM Observability is enabled when DD_LLMOBS_ENABLED=true is set in
+the environment and the ddtrace package is installed.  When disabled or
+unavailable the module behaves identically to the uninstrumented version.
 """
 
 import json
@@ -10,6 +14,12 @@ import logging
 import os
 
 import boto3
+
+# Optional Datadog LLM Observability — graceful degradation when not installed
+try:
+    from ddtrace.llmobs import LLMObs
+except ImportError:
+    LLMObs = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +33,46 @@ _MAX_TOKENS: int = int(os.environ.get("BEDROCK_MAX_TOKENS", "512"))
 # Required keys that must be present in the Bedrock response
 _REQUIRED_KEYS = {"root_cause", "evidence", "impact", "recommended_fix", "confidence"}
 
+
+# ---------------------------------------------------------------------------
+# Datadog LLM Observability helpers
+# ---------------------------------------------------------------------------
+
+def _llmobs_enabled() -> bool:
+    """Return True only when ddtrace is installed and DD_LLMOBS_ENABLED=true."""
+    return LLMObs is not None and os.environ.get("DD_LLMOBS_ENABLED", "").lower() == "true"
+
+
+_llmobs_initialized: bool = False
+
+
+def _init_llmobs() -> None:
+    """Initialise Datadog LLM Observability once at import time (no-op if disabled)."""
+    global _llmobs_initialized
+    if not _llmobs_enabled() or _llmobs_initialized:
+        return
+    try:
+        LLMObs.enable(
+            ml_app=os.environ.get("DD_LLMOBS_ML_APP", "cloudwatch-rca-poc"),
+            agentless_enabled=os.environ.get("DD_LLMOBS_AGENTLESS_ENABLED", "true").lower() == "true",
+            site=os.environ.get("DD_SITE", "datadoghq.com"),
+            api_key=os.environ["DD_API_KEY"],
+        )
+        _llmobs_initialized = True
+        logger.info(
+            "Datadog LLM Observability enabled (ml_app=%s)",
+            os.environ.get("DD_LLMOBS_ML_APP", "cloudwatch-rca-poc"),
+        )
+    except Exception as exc:
+        logger.warning("Failed to initialise Datadog LLM Observability: %s", exc)
+
+
+_init_llmobs()
+
+
+# ---------------------------------------------------------------------------
+# Prompt building
+# ---------------------------------------------------------------------------
 
 def build_prompt(bundle: dict) -> str:
     """
@@ -65,6 +115,10 @@ def build_prompt(bundle: dict) -> str:
     return prompt
 
 
+# ---------------------------------------------------------------------------
+# Bedrock invocation
+# ---------------------------------------------------------------------------
+
 def invoke_rca(bundle: dict) -> dict:
     """
     Invoke the Claude model on Bedrock to produce a root-cause analysis.
@@ -72,6 +126,11 @@ def invoke_rca(bundle: dict) -> dict:
     Sends the incident bundle as a compact prompt using the Anthropic Messages
     API format, parses the JSON response, and validates that all required keys
     are present.
+
+    When Datadog LLM Observability is enabled the call is wrapped in an LLM
+    span that records the prompt, completion, approximate token counts, and any
+    error metadata.  Errors always propagate to the caller so the API returns
+    a 502 regardless of instrumentation state.
 
     Args:
         bundle: Incident bundle produced by ``build_bundle``.
@@ -96,45 +155,75 @@ def invoke_rca(bundle: dict) -> dict:
             approx_tokens,
         )
 
-    client = boto3.client("bedrock-runtime")
+    # Open a Datadog LLM span when observability is active, otherwise span=None
+    # and every span-related branch below is skipped (graceful degradation).
+    span = None
+    if _llmobs_enabled():
+        span = LLMObs.llm(
+            model_name=_MODEL_ID,
+            model_provider="bedrock",
+            name="invoke_rca",
+        )
+        span.__enter__()
+        LLMObs.annotate(span, input_data=[{"role": "user", "content": prompt}])
 
-    request_body = {
-        "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": _MAX_TOKENS,
-        "messages": [
-            {
-                "role": "user",
-                "content": prompt,
-            }
-        ],
-    }
+    try:
+        client = boto3.client("bedrock-runtime")
 
-    response = client.invoke_model(
-        modelId=_MODEL_ID,
-        contentType="application/json",
-        accept="application/json",
-        body=json.dumps(request_body),
-    )
+        request_body = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": _MAX_TOKENS,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ],
+        }
 
-    response_body = json.loads(response["body"].read())
-
-    # Extract the text content from the Anthropic Messages API response
-    # Response format: {"content": [{"type": "text", "text": "..."}], ...}
-    content_blocks = response_body.get("content", [])
-    text_content = ""
-    for block in content_blocks:
-        if block.get("type") == "text":
-            text_content = block["text"].strip()
-            break
-
-    rca = json.loads(text_content)
-
-    # Validate all required keys are present
-    missing = _REQUIRED_KEYS - set(rca.keys())
-    if missing:
-        raise ValueError(
-            f"Bedrock response missing required keys: {sorted(missing)}. "
-            f"Got: {sorted(rca.keys())}"
+        response = client.invoke_model(
+            modelId=_MODEL_ID,
+            contentType="application/json",
+            accept="application/json",
+            body=json.dumps(request_body),
         )
 
-    return rca
+        response_body = json.loads(response["body"].read())
+
+        # Extract the text content from the Anthropic Messages API response
+        # Response format: {"content": [{"type": "text", "text": "..."}], ...}
+        content_blocks = response_body.get("content", [])
+        text_content = ""
+        for block in content_blocks:
+            if block.get("type") == "text":
+                text_content = block["text"].strip()
+                break
+
+        rca = json.loads(text_content)
+
+        # Validate all required keys are present
+        missing = _REQUIRED_KEYS - set(rca.keys())
+        if missing:
+            raise ValueError(
+                f"Bedrock response missing required keys: {sorted(missing)}. "
+                f"Got: {sorted(rca.keys())}"
+            )
+
+        if span:
+            LLMObs.annotate(
+                span,
+                output_data=[{"role": "assistant", "content": text_content}],
+                metadata={
+                    "input_tokens": approx_tokens,
+                    "output_tokens": len(text_content) // 4,
+                },
+            )
+            span.__exit__(None, None, None)
+
+        return rca
+
+    except Exception as exc:
+        if span:
+            LLMObs.annotate(span, metadata={"error": str(exc)})
+            span.__exit__(type(exc), exc, exc.__traceback__)
+        raise
