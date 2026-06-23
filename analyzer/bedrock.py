@@ -1,7 +1,7 @@
 """
 Bedrock RCA integration.
 
-Builds a compact prompt from an incident bundle and invokes the Claude model
+Builds a compact prompt from an incident bundle and invokes the LLM model
 via Amazon Bedrock to produce a JSON-only root-cause analysis.
 
 Datadog LLM Observability is enabled when DD_LLMOBS_ENABLED=true is set in
@@ -118,11 +118,14 @@ def build_prompt(bundle: dict) -> str:
 
 def invoke_rca(bundle: dict) -> dict:
     """
-    Invoke the Claude model on Bedrock to produce a root-cause analysis.
+    Invoke the LLM model on Bedrock to produce a root-cause analysis.
 
     Sends the incident bundle as a compact prompt using the Anthropic Messages
     API format, parses the JSON response, and validates that all required keys
     are present.
+
+    When MOCK_BEDROCK=true is set, returns a canned response without calling
+    AWS. Useful for local testing without Bedrock credentials.
 
     When Datadog LLM Observability is enabled the call is wrapped in an LLM
     span that records the prompt, completion, approximate token counts, and any
@@ -140,6 +143,20 @@ def invoke_rca(bundle: dict) -> dict:
         ValueError: If the response JSON is missing any of the required keys.
         json.JSONDecodeError: If the response body cannot be parsed as JSON.
     """
+    # Mock mode — return canned response without calling AWS
+    if os.environ.get("MOCK_BEDROCK", "").lower() == "true":
+        log_summary = bundle.get("log_summary", [])
+        has_errors = any(
+            str(e.get("severity", "")).upper() == "ERROR" for e in log_summary
+        )
+        return {
+            "triage_result": "watch" if has_errors else "noise",
+            "root_cause": "[MOCK] Simulated root cause based on incident bundle evidence",
+            "evidence": f"[MOCK] {len(log_summary)} log entries analyzed",
+            "recommended_focus": "[MOCK] Investigate service dependency health and error rate patterns",
+            "confidence": 0.65 if has_errors else 0.3,
+        }
+
     prompt = build_prompt(bundle)
 
     # Approximate token count: ~1 token per 4 characters

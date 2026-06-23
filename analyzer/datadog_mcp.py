@@ -15,8 +15,19 @@ from datetime import datetime
 from typing import Any, AsyncIterator
 
 from mcp import ClientSession, StdioServerParameters
-from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
+
+# Import streamable HTTP client — available in mcp>=1.8.0
+try:
+    from mcp.client.streamable_http import streamablehttp_client
+except ImportError:
+    streamablehttp_client = None  # type: ignore[assignment]
+
+# Fallback to SSE for older mcp versions
+try:
+    from mcp.client.sse import sse_client
+except ImportError:
+    sse_client = None  # type: ignore[assignment]
 
 
 @dataclass
@@ -43,8 +54,11 @@ async def _get_mcp_client() -> AsyncIterator[ClientSession]:
     """Yield an initialized MCP ClientSession ready for tool calls.
 
     Reads DD_MCP_TRANSPORT env var to choose transport:
-      - "stdio" (default): spawns `npx -y @datadog/mcp` with DD credentials
-      - "http": connects to DD_MCP_URL via SSE
+      - "stdio" (default): spawns `npx -y @datadog/mcp` subprocess
+      - "http": connects to DD_MCP_URL via Streamable HTTP (or SSE fallback)
+
+    For the managed Datadog MCP endpoint (https://mcp.datadoghq.com/...),
+    authentication is done via DD-API-KEY and DD-APPLICATION-KEY headers.
 
     Usage::
 
@@ -82,11 +96,44 @@ async def _get_mcp_client() -> AsyncIterator[ClientSession]:
                     stdio_client(server_params)
                 )
             else:
-                # HTTP/SSE transport
-                url = os.environ.get("DD_MCP_URL", "http://localhost:3000")
-                read_stream, write_stream = await stack.enter_async_context(
-                    sse_client(url)
-                )
+                # HTTP transport — for managed Datadog MCP or self-hosted
+                dd_site = os.environ.get("DD_SITE", "datadoghq.com")
+                default_url = f"https://mcp.{dd_site}/api/unstable/mcp-server/mcp"
+                url = os.environ.get("DD_MCP_URL", default_url)
+
+                # Auth headers for the managed Datadog MCP endpoint
+                try:
+                    api_key = os.environ["DD_API_KEY"]
+                    app_key = os.environ["DD_APP_KEY"]
+                except KeyError as exc:
+                    raise MCPUnavailableError(
+                        f"Missing required environment variable for MCP HTTP transport: {exc}"
+                    ) from exc
+
+                headers = {
+                    "DD-API-KEY": api_key,
+                    "DD-APPLICATION-KEY": app_key,
+                }
+
+                # Prefer streamable HTTP client, fall back to SSE
+                if streamablehttp_client is not None:
+                    transport_ctx = streamablehttp_client(url, headers=headers)
+                    transport_result = await stack.enter_async_context(transport_ctx)
+                    # streamablehttp_client may yield 2 or 3 values depending on version
+                    if isinstance(transport_result, tuple) and len(transport_result) == 3:
+                        read_stream, write_stream, _ = transport_result
+                    elif isinstance(transport_result, tuple) and len(transport_result) == 2:
+                        read_stream, write_stream = transport_result
+                    else:
+                        read_stream, write_stream = transport_result
+                elif sse_client is not None:
+                    read_stream, write_stream = await stack.enter_async_context(
+                        sse_client(url, headers=headers)
+                    )
+                else:
+                    raise MCPUnavailableError(
+                        "No HTTP MCP client available. Install mcp>=1.8.0 for streamablehttp_client."
+                    )
 
             # Create and initialize the ClientSession
             session = await stack.enter_async_context(
@@ -300,23 +347,69 @@ def _safe_duration_ms(raw_duration: Any) -> float:
 # ---------------------------------------------------------------------------
 
 
+def _parse_tsv_response(text: str) -> list[dict[str, str]]:
+    """Parse the Datadog MCP TSV response format into a list of dicts.
+
+    Format:
+        <METADATA>...xml metadata...</METADATA>
+        <TSV_DATA>
+        col1\\tcol2\\tcol3
+        val1\\tval2\\tval3
+        ...
+    """
+    rows: list[dict[str, str]] = []
+    try:
+        # Find the TSV_DATA section
+        tsv_start = text.index("<TSV_DATA>") + len("<TSV_DATA>")
+        tsv_text = text[tsv_start:].strip()
+
+        lines = tsv_text.split("\n")
+        if len(lines) < 2:
+            return []
+
+        # First line is the header
+        headers = lines[0].split("\t")
+        # Remaining lines are data rows
+        for line in lines[1:]:
+            if not line.strip():
+                continue
+            values = line.split("\t")
+            row = {}
+            for i, header in enumerate(headers):
+                row[header.strip()] = values[i].strip() if i < len(values) else ""
+            rows.append(row)
+    except (ValueError, IndexError):
+        pass
+    return rows
+
+
 def _extract_tool_result(result: Any) -> dict | list:
     """Extract parsed data from an MCP CallToolResult.
 
-    MCP's ``call_tool`` returns a ``CallToolResult`` object with a ``content``
-    list. Each content block may be a ``TextContent`` with a ``text`` attribute
-    containing JSON. This helper iterates the blocks and returns the first
-    successfully parsed JSON value.
+    The managed Datadog MCP server returns data in two possible formats:
+    1. JSON (for some tools) — parsed directly
+    2. TSV with XML metadata (for search tools) — parsed into a list of dicts
 
-    Returns an empty dict if no parseable content is found.
+    Returns an empty dict/list if no parseable content is found.
     """
-    if hasattr(result, "content") and result.content:
-        for block in result.content:
-            if hasattr(block, "text"):
-                try:
-                    return json.loads(block.text)
-                except (json.JSONDecodeError, TypeError):
-                    pass
+    if not hasattr(result, "content") or not result.content:
+        return {}
+
+    for block in result.content:
+        if not hasattr(block, "text") or not block.text:
+            continue
+        text = block.text
+
+        # Try JSON first
+        try:
+            return json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+        # Parse Datadog MCP TSV format: <METADATA>...</METADATA>\n<TSV_DATA>\nheader\nrow1\n...
+        if "<TSV_DATA>" in text:
+            return _parse_tsv_response(text)
+
     return {}
 
 
@@ -339,6 +432,9 @@ def fetch_evidence(
     FastAPI runs sync route handlers in a thread pool (no running event loop),
     so ``asyncio.run()`` is safe here.
 
+    When MOCK_MCP=true is set, returns synthetic evidence without calling
+    Datadog. Useful for local testing without Datadog credentials.
+
     Args:
         service: Datadog service name to filter on.
         window_start: Start of the evidence time window.
@@ -354,6 +450,44 @@ def fetch_evidence(
         MCPUnavailableError: When the MCP server cannot be reached.
         MCPQueryError:       When a specific MCP tool call fails.
     """
+    # Mock mode — return synthetic evidence without calling Datadog
+    if os.environ.get("MOCK_MCP", "").lower() == "true":
+        return MCPEvidence(
+            logs=[
+                {
+                    "timestamp": window_start.isoformat() + "Z",
+                    "severity": "ERROR",
+                    "error_type": "http_exception",
+                    "message": "[MOCK] Injected random internal server error",
+                    "trace_id": "mock-trace-001",
+                    "service": service,
+                },
+                {
+                    "timestamp": window_start.isoformat() + "Z",
+                    "severity": "WARNING",
+                    "error_type": "dependency_timeout",
+                    "message": "[MOCK] Simulated dependency timeout on request #50",
+                    "trace_id": "mock-trace-002",
+                    "service": service,
+                },
+            ],
+            traces=[
+                {
+                    "trace_id": "mock-trace-001",
+                    "span_id": "mock-span-001",
+                    "service": service,
+                    "resource": "GET /",
+                    "error": True,
+                    "duration": 4500.0,
+                    "start": window_start.isoformat(),
+                    "error_type": "http_exception",
+                    "error_message": "Internal Server Error",
+                },
+            ],
+            monitors=[],
+            incidents=[],
+        )
+
     return asyncio.run(
         _fetch_evidence_async(
             service, window_start, window_end, pod_name, max_logs, max_traces
@@ -371,13 +505,14 @@ async def _fetch_evidence_async(
 ) -> MCPEvidence:
     """Async implementation that performs the actual MCP tool calls.
 
-    Calls four Datadog MCP tools in sequence within a single session:
-      1. logs_list_events — error/warn logs filtered by service and time
-      2. apm_list_traces — error traces filtered by service and time
-      3. monitors_list_monitors — monitors in Alert or Warn state
-      4. incidents_list_incidents — currently active incidents
+    Calls Datadog MCP tools in sequence within a single session to fetch
+    logs, traces, monitors, and incidents.
     """
     async with _get_mcp_client() as session:
+        # Discover available tools
+        tools_response = await session.list_tools()
+        available_tools = {t.name for t in tools_response.tools}
+
         from_ts = int(window_start.timestamp())
         to_ts = int(window_end.timestamp())
         tag_filter = f"service:{service}"
@@ -386,53 +521,65 @@ async def _fetch_evidence_async(
         log_query = f"status:(error OR warn) {tag_filter}"
         if pod_name:
             log_query += f" pod_name:{pod_name}"
-        try:
-            raw_logs = await session.call_tool(
-                "logs_list_events",
-                arguments={
-                    "filter": {"query": log_query, "from": from_ts, "to": to_ts},
-                    "page": {"limit": max_logs},
-                },
-            )
-        except Exception as exc:
-            raise MCPQueryError(f"logs_list_events failed: {exc}") from exc
 
-        # 2. APM traces with errors
-        try:
-            raw_traces = await session.call_tool(
-                "apm_list_traces",
-                arguments={
-                    "filter": {
-                        "query": f"service:{service} error:true",
-                        "from": from_ts,
-                        "to": to_ts,
+        # Use the correct tool name — check available tools
+        logs_tool = next((t for t in ["search_datadog_logs", "list_logs", "logs_list_events", "analyze_datadog_logs"] if t in available_tools), None)
+        traces_tool = next((t for t in ["search_datadog_spans", "list_traces", "apm_list_traces", "get_datadog_trace"] if t in available_tools), None)
+        monitors_tool = next((t for t in ["search_datadog_monitors", "list_monitors", "monitors_list_monitors"] if t in available_tools), None)
+        incidents_tool = next((t for t in ["search_datadog_incidents", "list_incidents", "incidents_list_incidents"] if t in available_tools), None)
+
+        raw_logs: Any = {}
+        raw_traces: Any = {}
+        raw_monitors: Any = {}
+        raw_incidents: Any = {}
+
+        if logs_tool:
+            try:
+                raw_logs = await session.call_tool(
+                    logs_tool,
+                    arguments={
+                        "query": log_query,
                     },
-                    "page": {"limit": max_traces},
-                },
-            )
-        except Exception as exc:
-            raise MCPQueryError(f"apm_list_traces failed: {exc}") from exc
+                )
+            except Exception as exc:
+                raise MCPQueryError(f"{logs_tool} failed: {exc}") from exc
+        else:
+            import logging
+            logging.getLogger(__name__).warning("No logs tool found in MCP tools: %s", sorted(available_tools))
 
-        # 3. Monitors in alert/warn state
-        try:
-            raw_monitors = await session.call_tool(
-                "monitors_list_monitors",
-                arguments={
-                    "query": f"scope:{service}",
-                    "monitor_states": "Alert,Warn",
-                },
-            )
-        except Exception as exc:
-            raise MCPQueryError(f"monitors_list_monitors failed: {exc}") from exc
+        if traces_tool:
+            try:
+                raw_traces = await session.call_tool(
+                    traces_tool,
+                    arguments={
+                        "query": f"service:{service} status:error",
+                        "from": str(window_start.isoformat()) + "Z",
+                        "to": str(window_end.isoformat()) + "Z",
+                        "limit": max_traces,
+                    },
+                )
+            except Exception as exc:
+                raise MCPQueryError(f"{traces_tool} failed: {exc}") from exc
 
-        # 4. Open incidents
-        try:
-            raw_incidents = await session.call_tool(
-                "incidents_list_incidents",
-                arguments={"filter": "state:active"},
-            )
-        except Exception as exc:
-            raise MCPQueryError(f"incidents_list_incidents failed: {exc}") from exc
+        if monitors_tool:
+            try:
+                raw_monitors = await session.call_tool(
+                    monitors_tool,
+                    arguments={},
+                )
+            except Exception as exc:
+                raise MCPQueryError(f"{monitors_tool} failed: {exc}") from exc
+
+        if incidents_tool:
+            try:
+                raw_incidents = await session.call_tool(
+                    incidents_tool,
+                    arguments={},
+                )
+            except Exception as exc:
+                raise MCPQueryError(f"{incidents_tool} failed: {exc}") from exc
+
+        # Parse results from MCP tool call responses
 
         # Parse results from MCP tool call responses
         logs_data = _extract_tool_result(raw_logs)
