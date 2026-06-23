@@ -3,3 +3,4 @@ uvicorn[standard]==0.34.0
 boto3==1.38.0
 prometheus-client==0.21.0
 python-dotenv==1.0.1
+ddtrace==2.9.4

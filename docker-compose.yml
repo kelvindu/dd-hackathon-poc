@@ -8,16 +8,16 @@ services:
       - "8080:8080"
     environment:
       SERVICE_NAME: faulty-workload
-      # Log every request locally so you can see the output; tighten this in AWS
       FAULT_SAMPLE_RATE: "1.0"
-      # Pass through AWS credentials for CloudWatch log shipping
-      AWS_REGION: ${AWS_REGION:-us-east-1}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
-      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
-    # Mount ~/.aws so named profiles / SSO tokens work too
-    volumes:
-      - "${HOME}/.aws:/root/.aws:ro"
+      DD_AGENT_HOST: datadog-agent
+      DD_TRACE_ENABLED: "true"
+      DD_SERVICE: faulty-workload
+      DD_ENV: local
+      DD_VERSION: "0.1.0"
+    labels:
+      com.datadoghq.ad.logs: '[{"source":"python","service":"faulty-workload"}]'
+    depends_on:
+      - datadog-agent
 
   analyzer:
     build:
@@ -27,8 +27,16 @@ services:
       - "8000:8000"
     environment:
       SERVICE_NAME: analyzer
-      LOG_GROUP: /poc/faulty-workload
-      METRIC_NAMESPACE: POC/FaultyWorkload
+      DD_MCP_TRANSPORT: http
+      DD_MCP_URL: http://datadog-mcp:3000
+      DD_AGENT_HOST: datadog-agent
+      DD_TRACE_ENABLED: "true"
+      DD_SERVICE: analyzer
+      DD_ENV: local
+      DD_VERSION: "0.1.0"
+      DD_LLMOBS_ENABLED: "true"
+      DD_LLMOBS_AGENTLESS_ENABLED: "false"
+      DD_LLMOBS_ML_APP: datadogllm-poc
       AWS_REGION: ${AWS_REGION:-us-east-1}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
@@ -36,4 +44,50 @@ services:
     volumes:
       - "${HOME}/.aws:/root/.aws:ro"
     depends_on:
-      - faulty-workload
+      datadog-agent:
+        condition: service_started
+      datadog-mcp:
+        condition: service_healthy
+      faulty-workload:
+        condition: service_started
+
+  datadog-agent:
+    image: gcr.io/datadoghq/agent:7
+    env_file: .env
+    environment:
+      DD_LOGS_ENABLED: "true"
+      DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL: "true"
+      DD_CONTAINER_EXCLUDE: "name:datadog-agent"
+      DD_APM_ENABLED: "true"
+      DD_APM_NON_LOCAL_TRAFFIC: "true"
+      DD_PROMETHEUS_SCRAPE_ENABLED: "true"
+      DD_PROMETHEUS_SCRAPE_CHECKS: >-
+        [{"autodiscovery": {"kubernetes_container_names": []},
+          "configurations": [{"url": "http://faulty-workload:8080/metrics",
+                              "namespace": "faulty_workload",
+                              "metrics": ["request_count_total","error_count_total",
+                                          "warning_count_total","timeout_count_total",
+                                          "latency_ms_bucket","latency_ms_count"]}]}]
+      DD_DOGSTATSD_NON_LOCAL_TRAFFIC: "true"
+    ports:
+      - "8126:8126"
+      - "8125:8125/udp"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /proc:/host/proc:ro
+      - /sys/fs/cgroup:/host/sys/fs/cgroup:ro
+
+  datadog-mcp:
+    image: node:20-slim
+    working_dir: /app
+    command: >
+      sh -c "npm install -g @datadog/mcp@latest &&
+             npx @datadog/mcp --transport http --port 3000"
+    env_file: .env
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5

@@ -1,42 +1,111 @@
-# CloudWatch + Bedrock RCA PoC
+# Datadog + Bedrock RCA PoC
 
-A proof-of-concept observability pipeline for Kubernetes pods on EC2. A faulty workload intentionally emits errors and latency spikes, telemetry flows into CloudWatch via the ADOT Collector, and an analyzer service uses Amazon Bedrock (Claude 3 Haiku) to generate a concise root-cause analysis on demand.
+A proof-of-concept observability pipeline for Kubernetes pods on EC2. A faulty workload intentionally emits errors and latency spikes, telemetry flows into Datadog via the Datadog Agent, and an analyzer service uses Amazon Bedrock (Claude 3 Haiku) plus the Datadog MCP server to generate a concise root-cause analysis on demand.
 
 ```
-faulty-workload  →  ADOT Collector  →  CloudWatch Logs / Metrics / X-Ray
+faulty-workload  →  Datadog Agent  →  Datadog Backend (Logs / Metrics / APM / LLM Obs)
+                                              ↓
+                                   Datadog MCP Server  →  Datadog API
                                               ↓
                                          analyzer  →  Bedrock (Claude)  →  RCA JSON
 ```
 
-## Local Docker (quickstart — no Kubernetes needed)
+---
 
-You can run both services on your laptop with `docker compose`. The only AWS calls that happen are CloudWatch (log/metric writes from the workload, reads from the analyzer) and Bedrock (the RCA invocation) — your local `~/.aws` credentials are mounted read-only into the containers.
+## Prerequisites
 
-**Prerequisites:** Docker, `curl`, `jq`, AWS credentials with CloudWatch + Bedrock access.
+- **Docker** and Docker Compose
+- **AWS credentials** with Bedrock access (`bedrock:InvokeModel` on Claude 3 Haiku)
+- **Datadog account** with:
+  - `DD_API_KEY` — Datadog API key (used by the Agent and LLM Observability)
+  - `DD_APP_KEY` — Datadog Application key (used by the MCP server for queries)
+- `curl` and `jq` (for the smoke test)
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Docker Compose (local) / EKS (production)              │
+│                                                         │
+│  faulty-workload :8080                                  │
+│    ├─ stdout JSON logs ──┐                              │
+│    ├─ /metrics (Prom) ───┤                              │
+│    └─ ddtrace APM ───────┤                              │
+│                           ▼                             │
+│              Datadog Agent :8126                         │
+│                    │                                    │
+│                    │ HTTPS                              │
+│                    ▼                                    │
+│           Datadog Backend                               │
+│       (Logs · Metrics · APM · LLM Obs)                  │
+│                    ▲                                    │
+│                    │ Datadog API                        │
+│                    │                                    │
+│         Datadog MCP Server :3000                        │
+│                    ▲                                    │
+│                    │ MCP tool calls                     │
+│                    │                                    │
+│           analyzer :8000                                │
+│              │                                          │
+│              └──── Bedrock (Claude 3 Haiku) ────► RCA   │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Data Flow
+
+1. `faulty-workload` emits structured JSON logs, Prometheus metrics, and APM traces.
+2. The **Datadog Agent** collects all signals and forwards them to the Datadog backend.
+3. On `POST /rca/analyze`, the **analyzer** retrieves incident evidence via **Datadog MCP** tool calls.
+4. Evidence is compressed into an incident bundle and sent to **AWS Bedrock** (Claude 3 Haiku).
+5. Bedrock returns a structured RCA response with triage, root cause, evidence summary, recommended focus, and confidence.
+
+---
+
+## Environment Variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `DD_API_KEY` | Yes | Datadog API key (Agent + LLM Observability) |
+| `DD_APP_KEY` | Yes | Datadog Application key (MCP server queries) |
+| `DD_SITE` | No | Datadog site (default: `datadoghq.com`) |
+| `AWS_REGION` | No | AWS region for Bedrock (default: `us-east-1`) |
+| `AWS_ACCESS_KEY_ID` | Yes | AWS access key with Bedrock permissions |
+| `AWS_SECRET_ACCESS_KEY` | Yes | AWS secret key |
+| `AWS_SESSION_TOKEN` | No | AWS session token (if using temporary credentials) |
+| `BEDROCK_MODEL_ID` | No | Bedrock model (default: `anthropic.claude-3-haiku-20240307-v1:0`) |
+| `BEDROCK_MAX_TOKENS` | No | Max tokens for Bedrock response (default: `512`) |
+
+See `.env.example` for the full list including fault-tuning and smoke-test variables.
+
+---
+
+## Local Quickstart (Docker Compose)
 
 ```bash
-# 1. Set your region (defaults to us-east-1 if omitted)
-export AWS_REGION=us-east-1
+# 1. Create your .env file from the example
+cp .env.example .env
 
-# 2. Build and start both services
+# 2. Fill in your Datadog and AWS credentials
+#    Required: DD_API_KEY, DD_APP_KEY, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+$EDITOR .env
+
+# 3. Build and start all services
 docker compose up --build
 
-# 3. Check they're healthy
-curl http://localhost:8080/          # faulty-workload — expect {"status":"ok"}
-curl http://localhost:8000/health    # analyzer        — expect {"status":"ok"}
+# 4. Verify services are healthy
+curl http://localhost:8080/          # faulty-workload → {"status":"ok"}
+curl http://localhost:8000/health    # analyzer        → {"status":"ok"}
 
-# 4. Open the incident UI
+# 5. Wait ~90 seconds for Datadog ingestion, then run the smoke test
+./scripts/smoke_test.sh
+
+# 6. Open the RCA UI
 open http://localhost:8000
 ```
 
-To run the end-to-end smoke test against the local stack:
-
-```bash
-chmod +x scripts/smoke_test.sh
-WORKLOAD_URL=http://localhost:8080 ANALYZER_URL=http://localhost:8000 ./scripts/smoke_test.sh
-```
-
-> **Note:** The smoke test waits 60 seconds for CloudWatch ingestion. If the analyzer returns a 404 ("No CloudWatch data found"), wait a little longer and narrow the time window in the UI to just the last few minutes.
+The smoke test sends 50 requests to the faulty workload, waits 90 seconds for Datadog ingestion, calls `POST /rca/analyze`, and asserts the response contains all five RCA fields (`triage_result`, `root_cause`, `evidence`, `recommended_focus`, `confidence`).
 
 To stop:
 
@@ -46,207 +115,107 @@ docker compose down
 
 ---
 
-## Prerequisites (Kubernetes / production)
-
-- Docker (for local builds)
-- A Kubernetes cluster on EC2 (EKS recommended) with `kubectl` configured
-- AWS CLI configured with access to the target account/region
-- `curl` and `jq` (for the smoke test)
-- Bedrock model access enabled: `anthropic.claude-3-haiku-20240307-v1:0`
-
-## Repository layout
+## Repository Layout
 
 ```
 faulty-workload/   FastAPI service that generates controlled faults
-analyzer/          FastAPI service that queries CloudWatch and calls Bedrock
-k8s/               Kubernetes manifests (workload, analyzer, OTEL collector)
-cloudwatch/        Dashboard and alarm definitions
+analyzer/          FastAPI service that queries Datadog MCP and calls Bedrock
+k8s/               Kubernetes manifests (workload, analyzer, Datadog Agent, MCP)
 scripts/           End-to-end smoke test
 ```
 
 ---
 
-## 1. One-time AWS setup
+## Kubernetes / EKS Deployment
 
-### 1a. IAM roles (IRSA)
+### IAM (IRSA)
 
-Two IAM roles are required. Attach them to the EKS OIDC provider for your cluster.
-
-**OTEL Collector role** (`poc-otel-collector-role`) — needs:
-- `logs:CreateLogGroup`, `logs:CreateLogStream`, `logs:PutLogEvents`, `logs:DescribeLogGroups`, `logs:DescribeLogStreams`
-- `cloudwatch:PutMetricData`
-- `xray:PutTraceSegments`, `xray:PutTelemetryRecords`, `xray:GetSamplingRules`, `xray:GetSamplingTargets`
+One IAM role is required for the analyzer. Attach it to the EKS OIDC provider.
 
 **Analyzer role** (`poc-analyzer-role`) — needs:
-- `logs:StartQuery`, `logs:GetQueryResults`, `logs:StopQuery`
-- `cloudwatch:GetMetricStatistics`
 - `bedrock:InvokeModel` on `arn:aws:bedrock:*::foundation-model/anthropic.claude-3-haiku-20240307-v1:0`
 
-### 1b. Patch the manifests with your account details
+The Datadog Agent authenticates to the Datadog backend using `DD_API_KEY` (stored as a Kubernetes Secret), not AWS IAM.
+
+### Deploy
 
 ```bash
-ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-REGION=$(aws configure get region)
-CLUSTER_OIDC=$(aws eks describe-cluster --name <your-cluster> --query "cluster.identity.oidc.issuer" --output text | sed 's|https://||')
+# 1. Create the Datadog secret
+kubectl create secret generic datadog-secret \
+  --from-literal=api-key=$DD_API_KEY \
+  --from-literal=app-key=$DD_APP_KEY
 
-# Analyzer IRSA annotation
-sed -i "s/ACCOUNT_ID/${ACCOUNT_ID}/g" k8s/analyzer.yaml
+# 2. Deploy Datadog Agent (DaemonSet)
+kubectl apply -f k8s/datadog-agent.yaml
 
-# OTEL collector IRSA annotation
-OTEL_ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/poc-otel-collector-role"
-sed -i "s|\${OTEL_COLLECTOR_ROLE_ARN}|${OTEL_ROLE_ARN}|g" k8s/otel-collector.yaml
-```
+# 3. Deploy Datadog MCP server
+kubectl apply -f k8s/datadog-mcp.yaml
 
----
-
-## 2. Build and push Docker images
-
-Replace `<ECR_REGISTRY>` with your ECR registry URI (e.g. `123456789012.dkr.ecr.us-east-1.amazonaws.com`).
-
-```bash
-aws ecr get-login-password --region $REGION | \
-  docker login --username AWS --password-stdin <ECR_REGISTRY>
-
-# faulty-workload
-docker build -t faulty-workload:latest ./faulty-workload
-docker tag faulty-workload:latest <ECR_REGISTRY>/faulty-workload:latest
-docker push <ECR_REGISTRY>/faulty-workload:latest
-
-# analyzer
-docker build -t analyzer:latest ./analyzer
-docker tag analyzer:latest <ECR_REGISTRY>/analyzer:latest
-docker push <ECR_REGISTRY>/analyzer:latest
-```
-
-Update the `image:` fields in `k8s/faulty-workload.yaml` and `k8s/analyzer.yaml` to the full ECR URIs before deploying.
-
----
-
-## 3. Deploy to Kubernetes
-
-Apply the manifests in order:
-
-```bash
-# 1. OTEL Collector (DaemonSet — ships telemetry to CloudWatch)
-kubectl apply -f k8s/otel-collector.yaml
-
-# 2. Faulty workload
+# 4. Deploy faulty workload
 kubectl apply -f k8s/faulty-workload.yaml
 
-# 3. Analyzer
+# 5. Deploy analyzer
 kubectl apply -f k8s/analyzer.yaml
 
-# Verify everything is running
+# Verify
 kubectl get pods
-kubectl get svc
-```
-
-Expected output once healthy:
-
-```
-NAME                            READY   STATUS    RESTARTS
-otel-collector-xxxxx            1/1     Running   0
-faulty-workload-xxxxx           1/1     Running   0
-analyzer-xxxxx                  1/1     Running   0
 ```
 
 ---
 
-## 4. Set up CloudWatch dashboard and alarms
+## Smoke Test
 
 ```bash
-REGION=$(aws configure get region)
-
-# Create the dashboard
-aws cloudwatch put-dashboard \
-  --dashboard-name POC-FaultyWorkload \
-  --dashboard-body file://cloudwatch/dashboard.json \
-  --region $REGION
-
-# Create the alarms (one call per alarm definition)
-for alarm in $(jq -c '.[]' cloudwatch/alarms.json); do
-  aws cloudwatch put-metric-alarm \
-    --cli-input-json "$alarm" \
-    --region $REGION
-done
-```
-
----
-
-## 5. Run the smoke test
-
-Port-forward both services (or use the cluster DNS if running from within the cluster):
-
-```bash
-kubectl port-forward svc/faulty-workload 8080:8080 &
-kubectl port-forward svc/analyzer 8000:8000 &
-```
-
-Then run the end-to-end test:
-
-```bash
-chmod +x scripts/smoke_test.sh
+# Against local Docker Compose (default)
 ./scripts/smoke_test.sh
-```
 
-The script sends 50 requests to the faulty workload, waits 60 seconds for CloudWatch ingestion, calls `POST /rca/analyze`, and asserts the response contains all five RCA fields with `confidence > 0`.
-
-To target different endpoints:
-
-```bash
-WORKLOAD_URL=http://my-workload-host:8080 \
-ANALYZER_URL=http://my-analyzer-host:8000 \
+# Against custom endpoints
+WORKLOAD_URL=http://my-workload:8080 \
+ANALYZER_URL=http://my-analyzer:8000 \
 ./scripts/smoke_test.sh
 ```
 
 ---
 
-## 6. Open the UI
+## Fault Injection Tuning
 
-```bash
-kubectl port-forward svc/analyzer 8000:8000
-```
+The faulty workload behaviour is controlled by environment variables:
 
-Then open [http://localhost:8000](http://localhost:8000). Fill in an incident ID, service name (`faulty-workload`), and a time window that overlaps with when you ran the smoke test, then click **Analyze Incident**.
+| Variable | Default | Description |
+|---|---|---|
+| `FAULT_SAMPLE_RATE` | `1.0` | Fraction of requests that emit a log line |
+| `HTTP_500_PROBABILITY` | `0.05` | Probability of a random HTTP 500 (5%) |
+| `LATENCY_SPIKE_PROBABILITY` | `0.05` | Probability of a 2–5s latency spike |
+| `TIMEOUT_EVERY_N` | `50` | Simulate a dependency timeout every N requests |
 
 ---
 
-## Local development (no Kubernetes)
+## Local Development (no Docker)
 
-You can run both services locally against real AWS credentials:
+Run services directly with `uvicorn` for the fastest iteration cycle:
 
 ```bash
-# Terminal 1 — faulty workload
+# Terminal 1 — faulty-workload
 cd faulty-workload
 pip install -r requirements.txt
 uvicorn app:app --host 0.0.0.0 --port 8080 --reload
 
-# Terminal 2 — analyzer
+# Terminal 2 — Datadog MCP server
+npx -y @datadog/mcp --transport http --port 3000
+# Requires DD_API_KEY and DD_APP_KEY in environment
+
+# Terminal 3 — analyzer
 cd analyzer
 pip install -r requirements.txt
-uvicorn app:app --host 0.0.0.0 --port 8000 --reload
+DD_MCP_TRANSPORT=http DD_MCP_URL=http://localhost:3000 \
+  uvicorn app:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-AWS credentials are picked up from the environment or `~/.aws`. Make sure the credentials have the same permissions described in section 1a.
-
 ---
 
-## Fault injection tuning
+## Cost Notes
 
-The faulty workload behaviour is controlled by environment variables in `k8s/faulty-workload.yaml`:
-
-| Variable | Default | Description |
-|---|---|---|
-| `FAULT_RATE` | `0.05` | Probability of a random HTTP 500 (5%) |
-| `LATENCY_SPIKE_INTERVAL` | `20` | Inject a 2–5s latency spike every N requests |
-| `TIMEOUT_INTERVAL` | `50` | Simulate a dependency timeout every N requests |
-| `FAULT_SAMPLE_RATE` | `0.1` | Fraction of fault-free requests that emit a log line (reduces CloudWatch cost) |
-
----
-
-## Cost notes
-
-- CloudWatch log retention is set to **3 days** in the OTEL collector config.
+- Datadog log volume is controlled by `FAULT_SAMPLE_RATE` (set to `1.0` locally, lower in production).
 - Only ERROR and WARNING log lines are queried by the analyzer (top 20 per incident).
 - Bedrock prompts target under 500 tokens; a warning is logged if this is exceeded.
 - For a light POC workload the total AWS cost should remain well within free-tier or single-digit USD per day.

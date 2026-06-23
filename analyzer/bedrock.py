@@ -31,7 +31,7 @@ _MODEL_ID: str = os.environ.get(
 _MAX_TOKENS: int = int(os.environ.get("BEDROCK_MAX_TOKENS", "512"))
 
 # Required keys that must be present in the Bedrock response
-_REQUIRED_KEYS = {"root_cause", "evidence", "impact", "recommended_fix", "confidence"}
+_REQUIRED_KEYS = {"triage_result", "root_cause", "evidence", "recommended_focus", "confidence"}
 
 
 # ---------------------------------------------------------------------------
@@ -47,21 +47,19 @@ _llmobs_initialized: bool = False
 
 
 def _init_llmobs() -> None:
-    """Initialise Datadog LLM Observability once at import time (no-op if disabled)."""
+    """Initialise Datadog LLM Observability once (no-op if disabled)."""
     global _llmobs_initialized
     if not _llmobs_enabled() or _llmobs_initialized:
         return
     try:
         LLMObs.enable(
-            ml_app=os.environ.get("DD_LLMOBS_ML_APP", "cloudwatch-rca-poc"),
-            agentless_enabled=os.environ.get("DD_LLMOBS_AGENTLESS_ENABLED", "true").lower() == "true",
-            site=os.environ.get("DD_SITE", "datadoghq.com"),
-            api_key=os.environ["DD_API_KEY"],
+            ml_app=os.environ.get("DD_LLMOBS_ML_APP", "datadogllm-poc"),
+            agentless_enabled=False,  # route via Datadog Agent
         )
         _llmobs_initialized = True
         logger.info(
             "Datadog LLM Observability enabled (ml_app=%s)",
-            os.environ.get("DD_LLMOBS_ML_APP", "cloudwatch-rca-poc"),
+            os.environ.get("DD_LLMOBS_ML_APP", "datadogllm-poc"),
         )
     except Exception as exc:
         logger.warning("Failed to initialise Datadog LLM Observability: %s", exc)
@@ -79,39 +77,38 @@ def build_prompt(bundle: dict) -> str:
     Build a compact structured prompt from the incident bundle.
 
     The prompt instructs Claude to analyse the supplied incident data
-    (log summary, metric deltas, trace anomalies) and return a JSON object
-    with exactly five keys: root_cause, evidence, impact, recommended_fix,
-    and confidence (0.0–1.0).
+    (log summary, trace anomalies, monitor alerts, incidents) and return a
+    JSON object with exactly five keys: triage_result, root_cause, evidence,
+    recommended_focus, and confidence (0.0–1.0).
+
+    Includes triage classification rules (noise | watch | needs-attention),
+    uncertainty/tentative logic for weak evidence, and an explicit instruction
+    that recommended_focus must be operational — no code fixes.
 
     Args:
         bundle: Incident bundle produced by ``build_bundle``. Expected keys:
-                log_summary, metric_deltas, trace_anomalies.
+                log_summary, trace_anomalies, monitor_alerts, incidents.
 
     Returns:
         A prompt string targeting < 500 tokens.
     """
-    log_summary = bundle.get("log_summary", [])
-    metric_deltas = bundle.get("metric_deltas", {})
-    trace_anomalies = bundle.get("trace_anomalies", [])
-
-    incident_data = json.dumps(
-        {
-            "log_summary": log_summary,
-            "metric_deltas": metric_deltas,
-            "trace_anomalies": trace_anomalies,
-        },
-        separators=(",", ":"),  # compact representation to save tokens
-    )
-
+    incident_data = json.dumps(bundle, separators=(",", ":"))
     prompt = (
-        "You are an SRE assistant. Analyse the following Kubernetes incident data "
-        "and return ONLY a JSON object with exactly these keys: "
-        "root_cause (string), evidence (string), impact (string), "
-        "recommended_fix (string), confidence (float 0.0-1.0). "
+        "You are an SRE triage assistant. Analyse the following Kubernetes incident data. "
+        "Return ONLY a JSON object with exactly these keys:\n"
+        "  triage_result   – one of: noise | watch | needs-attention\n"
+        "  root_cause      – most likely cause based on evidence only (string)\n"
+        "  evidence        – key signals observed (string)\n"
+        "  recommended_focus – operational investigation area, NOT code fixes (string)\n"
+        "  confidence      – float 0.0–1.0\n"
+        "Rules:\n"
+        "- If evidence is weak, set confidence < 0.5 and prefix root_cause with '[TENTATIVE]'.\n"
+        "- If error codes indicate a severe condition, escalate triage_result to at least 'watch'.\n"
+        "- Do NOT include code-fix instructions in recommended_focus.\n"
+        "- State uncertainty explicitly when evidence is insufficient.\n"
         "No explanation outside the JSON.\n\n"
         f"Incident data: {incident_data}"
     )
-
     return prompt
 
 
@@ -136,8 +133,8 @@ def invoke_rca(bundle: dict) -> dict:
         bundle: Incident bundle produced by ``build_bundle``.
 
     Returns:
-        A dict containing: root_cause, evidence, impact, recommended_fix,
-        confidence.
+        A dict containing: triage_result, root_cause, evidence,
+        recommended_focus, confidence.
 
     Raises:
         ValueError: If the response JSON is missing any of the required keys.

@@ -11,7 +11,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application source
-COPY app.py bedrock.py bundle.py cloudwatch.py ./
+COPY app.py bedrock.py bundle.py datadog_mcp.py ./
 COPY templates/ ./templates/
 
 EXPOSE 8000

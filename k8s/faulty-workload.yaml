@@ -26,7 +26,18 @@ spec:
           env:
             - name: SERVICE_NAME
               value: "faulty-workload"
-            # Fraction of non-fault requests to log (reduce CloudWatch volume)
+            # Datadog Agent / APM
+            - name: DD_AGENT_HOST
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: DD_SERVICE
+              value: "faulty-workload"
+            - name: DD_ENV
+              value: "production"
+            - name: DD_VERSION
+              value: "0.1.0"
+            # Fraction of non-fault requests to log
             - name: FAULT_SAMPLE_RATE
               value: "0.1"
             # Probability of injecting a hard HTTP 500 error (5%)

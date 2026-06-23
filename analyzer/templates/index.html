@@ -195,6 +195,21 @@
       transition: width 0.4s ease;
     }
 
+    /* Triage badge */
+    .triage-badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 12px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .triage-badge.noise { background: #3a3d4a; color: #aaa; }
+    .triage-badge.watch { background: #4a3a10; color: #d4a017; }
+    .triage-badge.needs-attention { background: #4a1a1a; color: #e05c5c; }
+
     /* Loading spinner */
     .spinner {
       display: none;
@@ -343,10 +358,20 @@
       }
     }
 
+    function triageBadgeClass(triage) {
+      const val = (triage || '').toLowerCase().trim();
+      if (val === 'noise') return 'noise';
+      if (val === 'watch') return 'watch';
+      if (val === 'needs-attention') return 'needs-attention';
+      return '';
+    }
+
     function renderRCA(data) {
       const container = document.getElementById('rca-content');
       const confidence = parseFloat(data.confidence) || 0;
       const pct = Math.min(Math.max(confidence * 100, 0), 100).toFixed(1);
+      const triageValue = data.triage_result || '—';
+      const badgeClass = triageBadgeClass(data.triage_result);
 
       container.innerHTML = `
         <div class="rca-grid">
@@ -355,12 +380,12 @@
             <div class="value">${escapeHtml(data.root_cause || '—')}</div>
           </div>
           <div class="rca-field full-width">
-            <div class="label">Impact</div>
-            <div class="value">${escapeHtml(data.impact || '—')}</div>
+            <div class="label">Triage</div>
+            <div class="value"><span class="triage-badge ${badgeClass}">${escapeHtml(triageValue)}</span></div>
           </div>
           <div class="rca-field full-width">
-            <div class="label">Recommended Fix</div>
-            <div class="value">${escapeHtml(data.recommended_fix || '—')}</div>
+            <div class="label">Recommended Focus</div>
+            <div class="value">${escapeHtml(data.recommended_focus || '—')}</div>
           </div>
           <div class="rca-field full-width">
             <div class="label">Confidence — ${pct}%</div>

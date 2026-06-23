@@ -1,0 +1,34 @@
+# Minimal local test compose — skips Datadog Agent, MCP, and Bedrock.
+# Usage: docker compose -f docker-compose.local-test.yml up --build
+#
+# Tests that both services build, start, and respond to health checks.
+
+services:
+
+  faulty-workload:
+    build:
+      context: ./faulty-workload
+    ports:
+      - "8080:8080"
+    environment:
+      SERVICE_NAME: faulty-workload
+      FAULT_SAMPLE_RATE: "1.0"
+      DD_TRACE_ENABLED: "false"
+      DD_SERVICE: faulty-workload
+      DD_ENV: local
+      DD_VERSION: "0.1.0"
+
+  analyzer:
+    build:
+      context: ./analyzer
+    ports:
+      - "8000:8000"
+    environment:
+      SERVICE_NAME: analyzer
+      DD_TRACE_ENABLED: "false"
+      DD_LLMOBS_ENABLED: "false"
+      DD_MCP_TRANSPORT: http
+      DD_MCP_URL: http://localhost:3000
+      AWS_REGION: us-east-1
+    depends_on:
+      - faulty-workload

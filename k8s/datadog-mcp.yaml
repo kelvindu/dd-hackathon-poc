@@ -1,0 +1,81 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: datadog-mcp
+  labels:
+    app: datadog-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: datadog-mcp
+  template:
+    metadata:
+      labels:
+        app: datadog-mcp
+    spec:
+      containers:
+        - name: mcp
+          image: node:20-slim
+          command: ["sh", "-c"]
+          args:
+            - |
+              npm install -g @datadog/mcp@latest &&
+              npx @datadog/mcp --transport http --port 3000
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          env:
+            - name: DD_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: datadog-secret
+                  key: api-key
+            - name: DD_APP_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: datadog-secret
+                  key: app-key
+            - name: DD_SITE
+              valueFrom:
+                secretKeyRef:
+                  name: datadog-secret
+                  key: site
+                  optional: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "250m"
+              memory: "256Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: datadog-mcp
+  labels:
+    app: datadog-mcp
+spec:
+  type: ClusterIP
+  selector:
+    app: datadog-mcp
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+      protocol: TCP
