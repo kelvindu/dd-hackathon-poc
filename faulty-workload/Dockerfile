@@ -11,7 +11,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application source
-COPY app.py .
+COPY app.py context.py faults.py logger.py metrics.py ./
 
 EXPOSE 8080
 

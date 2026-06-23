@@ -8,7 +8,45 @@ faulty-workload  →  ADOT Collector  →  CloudWatch Logs / Metrics / X-Ray
                                          analyzer  →  Bedrock (Claude)  →  RCA JSON
 ```
 
-## Prerequisites
+## Local Docker (quickstart — no Kubernetes needed)
+
+You can run both services on your laptop with `docker compose`. The only AWS calls that happen are CloudWatch (log/metric writes from the workload, reads from the analyzer) and Bedrock (the RCA invocation) — your local `~/.aws` credentials are mounted read-only into the containers.
+
+**Prerequisites:** Docker, `curl`, `jq`, AWS credentials with CloudWatch + Bedrock access.
+
+```bash
+# 1. Set your region (defaults to us-east-1 if omitted)
+export AWS_REGION=us-east-1
+
+# 2. Build and start both services
+docker compose up --build
+
+# 3. Check they're healthy
+curl http://localhost:8080/          # faulty-workload — expect {"status":"ok"}
+curl http://localhost:8000/health    # analyzer        — expect {"status":"ok"}
+
+# 4. Open the incident UI
+open http://localhost:8000
+```
+
+To run the end-to-end smoke test against the local stack:
+
+```bash
+chmod +x scripts/smoke_test.sh
+WORKLOAD_URL=http://localhost:8080 ANALYZER_URL=http://localhost:8000 ./scripts/smoke_test.sh
+```
+
+> **Note:** The smoke test waits 60 seconds for CloudWatch ingestion. If the analyzer returns a 404 ("No CloudWatch data found"), wait a little longer and narrow the time window in the UI to just the last few minutes.
+
+To stop:
+
+```bash
+docker compose down
+```
+
+---
+
+## Prerequisites (Kubernetes / production)
 
 - Docker (for local builds)
 - A Kubernetes cluster on EC2 (EKS recommended) with `kubectl` configured

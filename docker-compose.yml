@@ -1,0 +1,40 @@
+services:
+
+  faulty-workload:
+    build:
+      context: ./faulty-workload
+    ports:
+      - "8080:8080"
+    environment:
+      SERVICE_NAME: faulty-workload
+      FAULT_RATE: "0.05"
+      LATENCY_SPIKE_INTERVAL: "20"
+      TIMEOUT_INTERVAL: "50"
+      # Log every request locally so you can see the output; tighten this in AWS
+      FAULT_SAMPLE_RATE: "1.0"
+      # Pass through AWS credentials for CloudWatch log shipping
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+    # Mount ~/.aws so named profiles / SSO tokens work too
+    volumes:
+      - "${HOME}/.aws:/root/.aws:ro"
+
+  analyzer:
+    build:
+      context: ./analyzer
+    ports:
+      - "8000:8000"
+    environment:
+      SERVICE_NAME: analyzer
+      LOG_GROUP: /poc/faulty-workload
+      METRIC_NAMESPACE: POC/FaultyWorkload
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+    volumes:
+      - "${HOME}/.aws:/root/.aws:ro"
+    depends_on:
+      - faulty-workload
