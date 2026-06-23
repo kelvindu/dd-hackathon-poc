@@ -45,6 +45,17 @@ spec:
             # CloudWatch EMF metric namespace used by the faulty-workload
             - name: METRIC_NAMESPACE
               value: "POC/FaultyWorkload"
+            # Bedrock model configuration — override via ConfigMap or Secret as needed
+            - name: BEDROCK_MODEL_ID
+              value: "anthropic.claude-3-haiku-20240307-v1:0"
+            - name: BEDROCK_MAX_TOKENS
+              value: "512"
+            # AWS account ID used in IRSA annotations — set via Secret/ConfigMap
+            # - name: AWS_ACCOUNT_ID
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: aws-account
+            #       key: account_id
           resources:
             requests:
               cpu: "200m"

@@ -131,6 +131,14 @@ This plan implements a Kubernetes observability proof-of-concept in four phases:
   - Verify the Bedrock prompt stays under 500 tokens by logging token count in `bedrock.py`
   - _Requirements: Non-Functional Requirements_
 
+- [x] 19. Create dotenv deployments
+  - Make bedrock llm model configurable via .env
+  - Pull every constant placeholders in the previous tasks into .env
+  - cleanup the rest of app / hardcoded value / constants you see are better to be .env
+
+- [ ] Add Datadog AI Observability into bedrock
+
+
 ## Notes
 
 - Tasks 1–4 are complete; execution should resume from task 5.

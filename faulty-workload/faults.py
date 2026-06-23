@@ -32,16 +32,16 @@ from fastapi import HTTPException
 _TIMEOUT_EVERY_N: int = int(os.environ.get("TIMEOUT_EVERY_N", "50"))
 _MEMORY_PRESSURE_THRESHOLD: int = int(os.environ.get("MEMORY_PRESSURE_THRESHOLD", "100"))
 
-# Probability of an immediate HTTP 500 response (5 %).
-_HTTP_500_PROBABILITY: float = 0.05
+# Probability of an immediate HTTP 500 response — configurable via env.
+_HTTP_500_PROBABILITY: float = float(os.environ.get("HTTP_500_PROBABILITY", "0.05"))
 
 # Introduce a latency spike roughly once every 20 requests (5 % chance per
-# request on average mirrors the 1-in-20 cadence).
-_LATENCY_SPIKE_PROBABILITY: float = 1 / 20
+# request on average).  Configurable via env.
+_LATENCY_SPIKE_PROBABILITY: float = float(os.environ.get("LATENCY_SPIKE_PROBABILITY", "0.05"))
 
-# Spike duration range in seconds.
-_LATENCY_SPIKE_MIN_S: float = 2.0
-_LATENCY_SPIKE_MAX_S: float = 5.0
+# Spike duration range in seconds — configurable via env.
+_LATENCY_SPIKE_MIN_S: float = float(os.environ.get("LATENCY_SPIKE_MIN_S", "2.0"))
+_LATENCY_SPIKE_MAX_S: float = float(os.environ.get("LATENCY_SPIKE_MAX_S", "5.0"))
 
 # ---------------------------------------------------------------------------
 # Request counter (shared across threads, protected by a lock)

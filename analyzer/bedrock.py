@@ -7,19 +7,21 @@ via Amazon Bedrock to produce a JSON-only root-cause analysis.
 
 import json
 import logging
+import os
 
 import boto3
 
 logger = logging.getLogger(__name__)
 
-# Model to use for RCA
-_MODEL_ID = "anthropic.claude-3-haiku-20240307-v1:0"
+# Model and token settings — read from environment so they can be overridden
+# without rebuilding the image.  Defaults match the original hardcoded values.
+_MODEL_ID: str = os.environ.get(
+    "BEDROCK_MODEL_ID", "anthropic.claude-3-haiku-20240307-v1:0"
+)
+_MAX_TOKENS: int = int(os.environ.get("BEDROCK_MAX_TOKENS", "512"))
 
 # Required keys that must be present in the Bedrock response
 _REQUIRED_KEYS = {"root_cause", "evidence", "impact", "recommended_fix", "confidence"}
-
-# Max tokens to request in the Bedrock response
-_MAX_TOKENS = 512
 
 
 def build_prompt(bundle: dict) -> str:

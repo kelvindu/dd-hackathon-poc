@@ -5,6 +5,10 @@ import random
 import time
 import uuid
 
+from dotenv import load_dotenv
+
+load_dotenv()  # loads .env from CWD or any parent directory; no-op if not found
+
 # ---------------------------------------------------------------------------
 # Cost / volume tuning
 # ---------------------------------------------------------------------------

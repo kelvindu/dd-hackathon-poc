@@ -3,6 +3,10 @@ import os
 from datetime import datetime
 from typing import Optional
 
+from dotenv import load_dotenv
+
+load_dotenv()  # loads .env from CWD or any parent directory; no-op if not found
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -15,7 +19,7 @@ app = FastAPI(title="RCA Analyzer", version="0.1.0")
 templates = Jinja2Templates(directory="templates")
 
 # ---------------------------------------------------------------------------
-# Environment defaults
+# Environment defaults (kept as fallback values only; .env is the source of truth)
 # ---------------------------------------------------------------------------
 
 _DEFAULT_LOG_GROUP = "/poc/faulty-workload"

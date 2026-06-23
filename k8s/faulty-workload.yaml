@@ -26,18 +26,26 @@ spec:
           env:
             - name: SERVICE_NAME
               value: "faulty-workload"
-            # Probability of injecting a hard HTTP 500 error (5%)
-            - name: FAULT_RATE
-              value: "0.05"
-            # Inject a latency spike every N requests
-            - name: LATENCY_SPIKE_INTERVAL
-              value: "20"
-            # Simulate a dependency timeout every N requests
-            - name: TIMEOUT_INTERVAL
-              value: "50"
             # Fraction of non-fault requests to log (reduce CloudWatch volume)
             - name: FAULT_SAMPLE_RATE
               value: "0.1"
+            # Probability of injecting a hard HTTP 500 error (5%)
+            - name: HTTP_500_PROBABILITY
+              value: "0.05"
+            # Probability of injecting a latency spike per request (~5%)
+            - name: LATENCY_SPIKE_PROBABILITY
+              value: "0.05"
+            # Latency spike duration range in seconds
+            - name: LATENCY_SPIKE_MIN_S
+              value: "2.0"
+            - name: LATENCY_SPIKE_MAX_S
+              value: "5.0"
+            # Simulate a dependency timeout every N requests
+            - name: TIMEOUT_EVERY_N
+              value: "50"
+            # Emit a memory-pressure warning every N requests
+            - name: MEMORY_PRESSURE_THRESHOLD
+              value: "100"
           resources:
             requests:
               cpu: "100m"

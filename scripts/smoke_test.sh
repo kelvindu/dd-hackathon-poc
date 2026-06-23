@@ -19,8 +19,8 @@ set -euo pipefail
 
 WORKLOAD_URL="${WORKLOAD_URL:-http://localhost:8080}"
 ANALYZER_URL="${ANALYZER_URL:-http://localhost:8000}"
-REQUEST_COUNT=50
-INGESTION_WAIT_SECS=60
+REQUEST_COUNT="${SMOKE_REQUEST_COUNT:-50}"
+INGESTION_WAIT_SECS="${SMOKE_INGESTION_WAIT_SECS:-60}"
 
 # ---------------------------------------------------------------------------
 # Dependency checks
