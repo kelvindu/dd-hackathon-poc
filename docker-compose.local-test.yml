@@ -1,34 +1,76 @@
-# Minimal local test compose — skips Datadog Agent, MCP, and Bedrock.
+# Local test compose — real Datadog Agent + managed MCP endpoint, mock Bedrock.
 # Usage: docker compose -f docker-compose.local-test.yml up --build
 #
-# Tests that both services build, start, and respond to health checks.
+# Prerequisites: DD_API_KEY and DD_APP_KEY set in .env
+# MCP connects directly to https://mcp.datadoghq.com (no local container).
 
 services:
 
   faulty-workload:
     build:
       context: ./faulty-workload
+    env_file: .env
     ports:
       - "8080:8080"
     environment:
       SERVICE_NAME: faulty-workload
       FAULT_SAMPLE_RATE: "1.0"
-      DD_TRACE_ENABLED: "false"
+      DD_AGENT_HOST: datadog-agent
+      DD_TRACE_ENABLED: "true"
       DD_SERVICE: faulty-workload
       DD_ENV: local
       DD_VERSION: "0.1.0"
+    labels:
+      com.datadoghq.ad.logs: '[{"source":"python","service":"faulty-workload"}]'
+    depends_on:
+      - datadog-agent
+
+  datadog-agent:
+    image: gcr.io/datadoghq/agent:7
+    env_file: .env
+    environment:
+      DD_LOGS_ENABLED: "true"
+      DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL: "true"
+      DD_CONTAINER_EXCLUDE: "name:datadog-agent"
+      DD_APM_ENABLED: "true"
+      DD_APM_NON_LOCAL_TRAFFIC: "true"
+      DD_PROMETHEUS_SCRAPE_ENABLED: "true"
+      DD_PROMETHEUS_SCRAPE_CHECKS: >-
+        [{"autodiscovery": {"kubernetes_container_names": []},
+          "configurations": [{"url": "http://faulty-workload:8080/metrics",
+                              "namespace": "faulty_workload",
+                              "metrics": ["request_count_total","error_count_total",
+                                          "warning_count_total","timeout_count_total",
+                                          "latency_ms_bucket","latency_ms_count"]}]}]
+      DD_DOGSTATSD_NON_LOCAL_TRAFFIC: "true"
+    ports:
+      - "8126:8126"
+      - "8125:8125/udp"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /proc:/host/proc:ro
+      - /sys/fs/cgroup:/host/sys/fs/cgroup:ro
 
   analyzer:
     build:
       context: ./analyzer
+    env_file: .env
     ports:
       - "8000:8000"
     environment:
       SERVICE_NAME: analyzer
-      DD_TRACE_ENABLED: "false"
-      DD_LLMOBS_ENABLED: "false"
+      MOCK_BEDROCK: "true"
+      # Real MCP — connects to Datadog's managed endpoint
       DD_MCP_TRANSPORT: http
-      DD_MCP_URL: http://localhost:3000
-      AWS_REGION: us-east-1
+      # DD_MCP_URL left unset → defaults to https://mcp.{DD_SITE}/api/unstable/mcp-server/mcp
+      DD_AGENT_HOST: datadog-agent
+      DD_TRACE_ENABLED: "true"
+      DD_SERVICE: analyzer
+      DD_ENV: local
+      DD_VERSION: "0.1.0"
+      DD_LLMOBS_ENABLED: "false"
     depends_on:
-      - faulty-workload
+      datadog-agent:
+        condition: service_started
+      faulty-workload:
+        condition: service_started
