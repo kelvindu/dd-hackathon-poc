@@ -23,7 +23,11 @@ mounted in ``app.py`` via :func:`make_asgi_app`.
 
 from __future__ import annotations
 
+import os
+
 from prometheus_client import Counter, Histogram, make_asgi_app
+
+_WORKLOAD_FAMILY = os.environ.get("WORKLOAD_FAMILY", "default")
 
 # ---------------------------------------------------------------------------
 # Counters
@@ -32,22 +36,25 @@ from prometheus_client import Counter, Histogram, make_asgi_app
 request_count: Counter = Counter(
     "request_count_total",
     "Total number of HTTP requests received by the faulty-workload service.",
+    labelnames=["workload_family"],
 )
 
 warning_count: Counter = Counter(
     "warning_count_total",
     "Total number of warning-class fault events emitted (e.g. memory pressure, bad payload).",
-    labelnames=["warning_type"],
+    labelnames=["workload_family", "warning_type"],
 )
 
 error_count: Counter = Counter(
     "error_count_total",
     "Total number of error-class fault events emitted (e.g. HTTP 500).",
+    labelnames=["workload_family"],
 )
 
 timeout_count: Counter = Counter(
     "timeout_count_total",
     "Total number of simulated dependency timeout events.",
+    labelnames=["workload_family"],
 )
 
 restart_count: Counter = Counter(
@@ -62,6 +69,7 @@ restart_count: Counter = Counter(
 latency_ms: Histogram = Histogram(
     "latency_ms",
     "Request latency in milliseconds.",
+    labelnames=["workload_family"],
     buckets=[10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000],
 )
 

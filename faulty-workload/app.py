@@ -10,6 +10,18 @@ from dotenv import load_dotenv
 load_dotenv()  # loads .env from CWD or any parent directory; no-op if not found
 
 # ---------------------------------------------------------------------------
+# Profile application — must run before faults.py is imported (reads env at
+# import time).  os.environ.setdefault ensures explicit env vars take
+# precedence over profile defaults.
+# ---------------------------------------------------------------------------
+from profiles import get_profile
+
+WORKLOAD_FAMILY = os.environ.get("WORKLOAD_FAMILY", "default")
+_profile = get_profile(WORKLOAD_FAMILY)
+for key, value in _profile.items():
+    os.environ.setdefault(key, value)
+
+# ---------------------------------------------------------------------------
 # Cost / volume tuning
 # ---------------------------------------------------------------------------
 
@@ -99,16 +111,16 @@ async def health_check(request: Request) -> JSONResponse:
     context vars by :class:`TraceContextMiddleware` and are picked up
     automatically by the JSON logger — no need to pass them explicitly.
     """
-    request_count.inc()
+    request_count.labels(workload_family=WORKLOAD_FAMILY).inc()
     start_time = time.monotonic()
 
     try:
         # apply_faults raises HTTPException for hard faults; returns warnings otherwise.
         fault_warnings: list[FaultResult] = await apply_faults(request)
     except HTTPException as exc:
-        error_count.inc()
+        error_count.labels(workload_family=WORKLOAD_FAMILY).inc()
         elapsed_ms = (time.monotonic() - start_time) * 1000
-        latency_ms.observe(elapsed_ms)
+        latency_ms.labels(workload_family=WORKLOAD_FAMILY).observe(elapsed_ms)
         logger.error(
             "Hard fault triggered: %s",
             exc.detail,
@@ -117,13 +129,13 @@ async def health_check(request: Request) -> JSONResponse:
         raise
 
     elapsed_ms = (time.monotonic() - start_time) * 1000
-    latency_ms.observe(elapsed_ms)
+    latency_ms.labels(workload_family=WORKLOAD_FAMILY).observe(elapsed_ms)
 
     # Log a WARNING for each soft fault / warning returned.
     for w in fault_warnings:
-        warning_count.labels(warning_type=w.warning_type).inc()
+        warning_count.labels(workload_family=WORKLOAD_FAMILY, warning_type=w.warning_type).inc()
         if w.warning_type == "dependency_timeout":
-            timeout_count.inc()
+            timeout_count.labels(workload_family=WORKLOAD_FAMILY).inc()
         logger.warning(w.message, extra={"error_type": w.warning_type})
 
     warning_payload = [

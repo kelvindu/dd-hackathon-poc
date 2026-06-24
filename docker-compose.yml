@@ -67,6 +67,21 @@ services:
                               "namespace": "faulty_workload",
                               "metrics": ["request_count_total","error_count_total",
                                           "warning_count_total","timeout_count_total",
+                                          "latency_ms_bucket","latency_ms_count"]},
+                             {"url": "http://customers-workload:8080/metrics",
+                              "namespace": "customers_workload",
+                              "metrics": ["request_count_total","error_count_total",
+                                          "warning_count_total","timeout_count_total",
+                                          "latency_ms_bucket","latency_ms_count"]},
+                             {"url": "http://orders-workload:8080/metrics",
+                              "namespace": "orders_workload",
+                              "metrics": ["request_count_total","error_count_total",
+                                          "warning_count_total","timeout_count_total",
+                                          "latency_ms_bucket","latency_ms_count"]},
+                             {"url": "http://auth-workload:8080/metrics",
+                              "namespace": "auth_workload",
+                              "metrics": ["request_count_total","error_count_total",
+                                          "warning_count_total","timeout_count_total",
                                           "latency_ms_bucket","latency_ms_count"]}]}]
       DD_DOGSTATSD_NON_LOCAL_TRAFFIC: "true"
     ports:
@@ -91,3 +106,63 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  customers-workload:
+    build:
+      context: ./faulty-workload
+    env_file: .env
+    ports:
+      - "8081:8080"
+    environment:
+      SERVICE_NAME: customers-workload
+      WORKLOAD_FAMILY: customers
+      FAULT_SAMPLE_RATE: "1.0"
+      DD_AGENT_HOST: datadog-agent
+      DD_TRACE_ENABLED: "true"
+      DD_SERVICE: customers-workload
+      DD_ENV: local
+      DD_VERSION: "0.1.0"
+    labels:
+      com.datadoghq.ad.logs: '[{"source":"python","service":"customers-workload"}]'
+    depends_on:
+      - datadog-agent
+
+  orders-workload:
+    build:
+      context: ./faulty-workload
+    env_file: .env
+    ports:
+      - "8082:8080"
+    environment:
+      SERVICE_NAME: orders-workload
+      WORKLOAD_FAMILY: orders
+      FAULT_SAMPLE_RATE: "1.0"
+      DD_AGENT_HOST: datadog-agent
+      DD_TRACE_ENABLED: "true"
+      DD_SERVICE: orders-workload
+      DD_ENV: local
+      DD_VERSION: "0.1.0"
+    labels:
+      com.datadoghq.ad.logs: '[{"source":"python","service":"orders-workload"}]'
+    depends_on:
+      - datadog-agent
+
+  auth-workload:
+    build:
+      context: ./faulty-workload
+    env_file: .env
+    ports:
+      - "8083:8080"
+    environment:
+      SERVICE_NAME: auth-workload
+      WORKLOAD_FAMILY: auth
+      FAULT_SAMPLE_RATE: "1.0"
+      DD_AGENT_HOST: datadog-agent
+      DD_TRACE_ENABLED: "true"
+      DD_SERVICE: auth-workload
+      DD_ENV: local
+      DD_VERSION: "0.1.0"
+    labels:
+      com.datadoghq.ad.logs: '[{"source":"python","service":"auth-workload"}]'
+    depends_on:
+      - datadog-agent

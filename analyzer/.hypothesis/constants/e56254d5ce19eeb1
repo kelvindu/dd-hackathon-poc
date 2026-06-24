@@ -1,0 +1,4 @@
+# file: /Users/bluerose/shigoto/hackathon/poc/analyzer/bundle.py
+# hypothesis_version: 6.141.1
+
+['ERROR', 'WARNING', 'incidents', 'log_summary', 'monitor_alerts', 'severity', 'timestamp', 'trace_anomalies']

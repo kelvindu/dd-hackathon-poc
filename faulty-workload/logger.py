@@ -61,6 +61,7 @@ class JsonFormatter(logging.Formatter):
         payload = {
             "timestamp": timestamp,
             "service": self._service_name,
+            "workload_family": os.environ.get("WORKLOAD_FAMILY", "default"),
             "severity": record.levelname,
             "trace_id": trace_id,
             "request_id": request_id,
